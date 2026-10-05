@@ -1,0 +1,324 @@
+---
+title: "Tutorial 3: Monte Carlo Simulations"
+author: "Fardin Abdulla"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = TRUE,
+                      fig.width = 6, fig.height = 4)
+```
+
+**Group members:** Fardin Abdulla; [add the other group members' names].
+
+Based on the tutorial by Richard Lockhart, adapted from Isaac Marchand.
+
+# What we are doing
+
+We generate random data many times and see what happens. This is called a
+Monte Carlo simulation.
+
+1. Make Q-Q plots to see how normal data can look different just by chance.
+2. Run a randomness test on 10,000 independent samples and count false alarms.
+3. Fit a straight line, test the leftover errors, and compare the false alarms.
+
+# Preparing the workspace
+
+We only need two extra packages: `ggplot2` for the plots and `TSA` for the
+runs test. The other functions come with R.
+
+```{r packages}
+# Install these packages only if they are missing.
+listPackages <- c("ggplot2", "TSA")
+for (package in listPackages) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    install.packages(package, repos = "https://cloud.r-project.org")
+  }
+}
+library(ggplot2)
+library(TSA)
+```
+
+# Part 1: Q-Q plots
+
+## One sample
+
+Generate 72 independent values from a normal distribution with mean 0 and
+standard deviation 1. Standardizing means subtracting the sample mean and
+dividing by the sample standard deviation.
+
+```{r singleQQ}
+set.seed(1943)
+n <- 72
+x <- rnorm(n)
+z <- (x - mean(x)) / sd(x)
+
+qqnorm(z)
+abline(0, 1, col = "blue")
+qqline(z, col = "red")
+```
+
+The blue line is $y=x$. The red line is fitted using the sample's first and
+third quartiles. Points near a straight line are consistent with normal data.
+Even genuinely normal samples do not fall exactly on a straight line.
+
+## Several sets of six plots, with and without standardizing
+
+The function below just saves us from copying the same plotting code six
+times. It follows the plotting code in the tutorial. In these panels,
+**red is $y=x$ and blue is the quartile line** (the same colours as the
+tutorial's six-panel example).
+
+```{r plot-function}
+plot_six <- function(x, plot_title) {
+  # Each column of x is one sample.
+  d <- data.frame(
+    value = as.vector(x),
+    sample = factor(rep(1:6, each = nrow(x)))
+  )
+
+  ggplot(d, aes(sample = value)) +
+    stat_qq(size = 0.5) +
+    stat_qq_line(color = "blue") +
+    geom_abline(intercept = 0, slope = 1, color = "red") +
+    facet_wrap(~ sample, nrow = 3, ncol = 2) +
+    coord_fixed(xlim = c(-3, 3), ylim = c(-4.5, 4.5)) +
+    labs(title = plot_title,
+         subtitle = "Red: y = x; Blue: quartile line",
+         x = "Normal Quantiles", y = "Observed Quantiles") +
+    theme_classic() +
+    theme(panel.spacing = grid::unit(0, "pt"),
+          panel.border = element_rect(color = "black", fill = NA))
+}
+```
+
+We set the seed once before the loop. Each round generates six new samples.
+Within each round, we use the same samples before and after standardizing,
+so the comparison is easier. `scale()` standardizes each column separately.
+
+```{r repeatedQQ, fig.width=6, fig.height=9}
+set.seed(123)
+n <- 72
+
+for (round in 1:3) {
+  x <- matrix(rnorm(6 * n), nrow = n, ncol = 6)
+
+  z <- scale(x)
+  print(plot_six(z, paste("Standardized samples - set", round)))
+
+  # This version does not use scale().
+  print(plot_six(x, paste("Unstandardized samples - set", round)))
+}
+```
+
+**Comments:** After standardizing, each sample has mean 0 and standard
+deviation 1, so the $y=x$ line is a useful overall reference. The quartile
+line can follow the middle points better, but it can also tilt away from
+the tails. Neither line has to be closer to every point in every sample.
+
+Without standardizing, the sample mean and standard deviation vary from
+sample to sample. The quartile line can adjust its position and slope, so
+it will often track the sample better than the fixed $y=x$ line.
+
+The main lesson is that normal samples can have bends, gaps, and points
+away from the line, especially at the ends. A few unusual-looking points
+are not enough on their own to conclude that the data are non-normal.
+
+# Part 2: The runs test on white noise
+
+White noise here means independent normal values with mean 0 and constant
+variance. A run is a consecutive group on the same side of a cutoff. For
+example, `+++ -- +` has three runs. Too many or too few runs can suggest
+that the ordering is not random.
+
+```{r part2}
+M <- 10000
+n <- 72
+set.seed(1943)
+
+# Each column is one independent sample of 72 observations.
+e <- matrix(rnorm(n * M), nrow = n)
+pv_noise <- apply(e, 2, function(x) { TSA::runs(x)$pvalue })
+length(unique(pv_noise))
+
+qqplot(qunif(ppoints(M)), pv_noise, pch = 19, cex = 0.2,
+       xlab = "Uniform Quantiles", ylab = "Runs-test p-values",
+       main = "White noise")
+abline(0, 1, col = "blue")
+```
+
+**Explaining the two requested lines:**
+
+- `apply(e, 2, ...)` takes one column of `e` at a time. The `2` means columns.
+  Each column is passed to the function as `x`.
+- `TSA::runs(x)` applies the runs test, and `$pvalue` extracts its p-value.
+  `pv_noise` stores all 10,000 p-values. It is the tutorial's `pv` variable,
+  renamed so that Part 3 does not overwrite it.
+- `unique(pv_noise)` keeps each distinct p-value once. `length(...)` counts
+  how many distinct p-values there are.
+
+The Q-Q plot compares these p-values with a uniform distribution from 0
+to 1. Ideally calibrated continuous p-values would follow the diagonal.
+Here, the runs statistic is discrete, so repeated p-values and steps are
+expected; the plot need not be perfectly straight.
+
+## Counts and estimated Type I error
+
+**Correction to the wording in the tutorial:** p-values *larger* than
+0.05 correspond to not rejecting. A Type I error means rejecting a true
+null hypothesis, so we count p-values **less than or equal to 0.05**.
+We show both counts below.
+
+```{r noise-counts}
+above_noise <- sum(pv_noise > 0.05)
+reject_noise <- sum(pv_noise <= 0.05)
+rate_noise <- reject_noise / M
+
+above_noise
+reject_noise
+rate_noise
+```
+
+There are **`r above_noise`** p-values above 0.05 and
+**`r reject_noise`** p-values at or below 0.05.
+The estimated Type I error probability is **`r round(rate_noise, 4)`**,
+or **`r round(100 * rate_noise, 2)`%**. These are false alarms because
+the samples really are independent white noise.
+
+## A 95% confidence interval
+
+Each simulation either rejects or does not reject. This lets us use a
+binomial confidence interval for the true rejection probability.
+
+```{r noise-ci}
+ci_noise <- binom.test(reject_noise, M, conf.level = 0.95)$conf.int
+inside_noise <- ci_noise[1] <= 0.05 && 0.05 <= ci_noise[2]
+ci_noise
+inside_noise
+
+# Use the interval to allow for Monte Carlo uncertainty.
+if (ci_noise[2] < 0.05) {
+  conclusion_noise <- "conservative"
+} else if (ci_noise[1] > 0.05) {
+  conclusion_noise <- "liberal"
+} else {
+  conclusion_noise <- "consistent with being well calibrated at 5%"
+}
+```
+
+The 95% interval is
+**(`r round(ci_noise[1], 4)`, `r round(ci_noise[2], 4)`)**.
+Is 0.05 inside? **`r if (inside_noise) "Yes" else "No"`.**
+The simulation suggests that the test is **`r conclusion_noise`**.
+Conservative means fewer false alarms than 5%; liberal means more than 5%.
+An interval containing 0.05 is compatible with 5%, but does not prove the
+true probability is exactly 0.05.
+
+# Part 3: The runs test on regression residuals
+
+A residual is the observed value minus the value predicted by a fitted
+line. We keep the matrix code supplied in the tutorial. It removes a
+fitted intercept and slope from each sample all at once.
+
+```{r part3}
+M <- 10000
+n <- 72
+
+# First column: intercept. Second column: fixed predictor values.
+desmat <- cbind(rep(1, n), qnorm(ppoints(n)))
+hatmat <- desmat %*% solve(t(desmat) %*% desmat, t(desmat))
+id.minus.hatmat <- diag(n) - hatmat
+sum(diag(hatmat))
+
+set.seed(1943)
+e <- matrix(rnorm(n * M), nrow = n)
+
+# Subtract the fitted line from each sample to obtain residuals.
+res <- id.minus.hatmat %*% e
+pv_res <- apply(res, 2, function(x) { TSA::runs(x)$pvalue })
+
+length(unique(pv_res))
+qqplot(qunif(ppoints(M)), pv_res, pch = 19, cex = 0.2,
+       xlab = "Uniform Quantiles", ylab = "Runs-test p-values",
+       main = "Regression residuals")
+abline(0, 1, col = "blue")
+```
+
+`hatmat` produces fitted values. `diag(n)` is the identity matrix, so
+`id.minus.hatmat` subtracts the fitted values from the original data.
+The diagonal sum is 2 because the regression estimates two parameters:
+an intercept and a slope.
+
+We do not need to add a nonzero trend before finding residuals: fitting
+the same intercept and slope would remove that trend anyway.
+
+## Counts, summary, and conclusion
+
+```{r residual-results}
+reject_res <- sum(pv_res <= 0.05)
+rate_res <- reject_res / M
+reject_res
+summary(pv_res)
+rate_res
+
+ci_res <- binom.test(reject_res, M, conf.level = 0.95)$conf.int
+inside_res <- ci_res[1] <= 0.05 && 0.05 <= ci_res[2]
+ci_res
+inside_res
+
+if (ci_res[2] < 0.05) {
+  conclusion_res <- "conservative relative to the nominal 5% rate"
+} else if (ci_res[1] > 0.05) {
+  conclusion_res <- "liberal relative to the nominal 5% rate"
+} else {
+  conclusion_res <- "consistent with a rejection rate of 5%"
+}
+```
+
+For residuals, **`r reject_res`** out of 10,000 samples reject.
+The estimated rejection probability is **`r round(rate_res, 4)`**
+(**`r round(100 * rate_res, 2)`%**).
+The 95% interval is **(`r round(ci_res[1], 4)`, `r round(ci_res[2], 4)`)**.
+Is 0.05 inside? **`r if (inside_res) "Yes" else "No"`.**
+The test is **`r conclusion_res`** in this simulation.
+
+Unlike the original errors, residuals within a sample are not independent:
+they share the same fitted line and must sum to zero. Therefore, this is a
+rejection rate under the fitted regression model, rather than an exact
+Type I error rate under independent observations. The separate simulated
+samples are still independent, so the binomial interval remains suitable
+for estimating this rejection rate.
+
+```{r comparison}
+comparison <- data.frame(
+  Data = c("White noise", "Regression residuals"),
+  Rejections = c(reject_noise, reject_res),
+  Rate = c(rate_noise, rate_res),
+  CI_lower = c(ci_noise[1], ci_res[1]),
+  CI_upper = c(ci_noise[2], ci_res[2])
+)
+knitr::kable(comparison, digits = 4)
+```
+
+# Before handing in
+
+1. Add every group member's name at the top (the tutorial asks for groups
+   of 3 or 4). If submitting individually, confirm the arrangement with
+   the instructor.
+2. Open this file in RStudio and click **Knit**. Review the plots and results.
+   Read the Q-Q comments alongside your plots and adjust them if needed.
+3. The default output is PDF. If R says LaTeX is missing, run
+   `install.packages("tinytex")` and then `tinytex::install_tinytex()` in
+   the Console once. Alternatively, choose **Knit to HTML** to check the
+   code and output first.
+4. Submit the Crowdmark paper separately. Email one `.Rmd` file per group
+   to the instructor as requested. The filename must include the name of
+   the student emailing it; this filename assumes Fardin is sending it.
+
+The numbers in the written answers are filled in automatically when the
+file is knitted, using the results calculated by the code above.
